@@ -25,7 +25,7 @@ class TestRateLimiting:
         assert rate_limited_count >= 5
         print(f"✅ Rate limiting works: {success_count} success, {rate_limited_count} rate limited")
     
-    @pyst.mark.asyncio
+    @pytest.mark.asyncio
     async def test_rate_limit_headers(self, client):
         """Test that rate limit headers are returned."""
         response = await client.get("/health")
