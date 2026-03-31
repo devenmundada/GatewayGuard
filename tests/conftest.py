@@ -1,8 +1,14 @@
 """
 Pytest configuration and fixtures.
 """
+import sys
+import os
+from pathlib import Path
+
+# Add the project root to Python path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 import pytest
-import pytest_asyncio
 from typing import AsyncGenerator
 from httpx import AsyncClient, ASGITransport
 from app.main import app
@@ -10,49 +16,39 @@ from app.db.database import engine
 from app.db.models import Base
 from app.middleware.rate_limiter_middleware import RateLimiterMiddleware
 from app.db import crud
-from app.services.redis_client import get_redis_client
 
 # Reset rate limiter between tests
 @pytest.fixture(autouse=True)
 def reset_rate_limit_memory():
-    """Isolate tests: clear in-memory rate limit buckets and Redis keys."""
-    # Clear memory store
+    """Isolate tests: clear in-memory rate limit buckets."""
     inst = RateLimiterMiddleware._active_instance
     if inst is not None:
         inst.rate_limiter.memory_store.clear()
-    
-    # Clear Redis rate limit keys
-    try:
-        redis_client = get_redis_client()
-        if redis_client:
-            keys = redis_client.keys("rl:*")
-            if keys:
-                redis_client.delete(*keys)
-    except Exception as e:
-        print(f"Warning: Could not clear Redis keys: {e}")
     
     # Reset auth in-memory stores
     crud.reset_memory_stores()
     
     yield
     
-    # Cleanup after test
     if inst is not None:
         inst.rate_limiter.memory_store.clear()
-    try:
-        redis_client = get_redis_client()
-        if redis_client:
-            keys = redis_client.keys("rl:*")
-            if keys:
-                redis_client.delete(*keys)
-    except Exception:
-        pass
     crud.reset_memory_stores()
 
-# Setup test database (skip if DB not available)
-@pytest_asyncio.fixture(scope="session", autouse=True)
-async def setup_test_database():
-    """Create tables before tests run (if DB is available)."""
+
+# Session-scoped event loop for database setup
+@pytest.fixture(scope="session")
+def event_loop():
+    """Create event loop for entire test session."""
+    import asyncio
+    loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+
+# Database setup - runs once per session
+@pytest.fixture(scope="session")
+async def setup_database():
+    """Create tables before tests run."""
     try:
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.create_all)
@@ -64,16 +60,20 @@ async def setup_test_database():
         async with engine.begin() as conn:
             await conn.run_sync(Base.metadata.drop_all)
     except Exception:
-        print("Warning: Could not drop test database tables")
+        pass
 
-@pytest_asyncio.fixture
-async def client() -> AsyncGenerator:
+
+# Test client - function scoped
+@pytest.fixture
+async def client():
     """Create test client for FastAPI app."""
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=transport, base_url="http://test") as client:
+    async with AsyncClient(transport=tra, base_url="http://test") as client:
         yield client
 
-@pytest_asyncio.fixture
+
+# Test user data
+@pytest.fixture
 def test_user():
     """Create test user data."""
     return {
@@ -82,15 +82,16 @@ def test_user():
         "password": "TestPassword123"
     }
 
-@pytest_asyncio.fixture
+
+# Auth headers - function scoped
+@pytest.fixture
 async def auth_headers(client, test_user):
     """Get authentication headers for test user."""
     # Register user
     resp = await client.post("/api/v1/auth/register", json=test_user)
     if resp.status_code == 429:
-        # If rate limited, wait and retry
         import asyncio
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.1)
         resp = await client.post("/api/v1/auth/register", json=test_user)
     
     # Login
@@ -101,7 +102,7 @@ async def auth_headers(client, test_user):
     
     if response.status_code == 429:
         import asyncio
-        await asyncio.sleep(1)
+        await asyncio.sleep(0.1)
         response = await client.post("/api/v1/auth/login", json={
             "email": test_user["email"],
             "password": test_user["password"]
