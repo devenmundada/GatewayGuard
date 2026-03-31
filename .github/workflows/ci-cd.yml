@@ -2,12 +2,13 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
   pull_request:
-    branches: [ main ]
+    branches: [ main, master ]
 
 jobs:
   test:
+    name: 🧪 Test Suite
     runs-on: ubuntu-latest
     
     services:
@@ -36,51 +37,107 @@ jobs:
           --health-retries 5
     
     steps:
-    - uses: actions/checkout@v4
+    - name: 📥 Checkout code
+      uses: actions/checkout@v4
     
-    - name: Set up Python
+    - name: 🐍 Set up Python 3.13
       uses: actions/setup-python@v5
       with:
-        python-version: '3.13'
+        python-n: '3.13'
+        cache: 'pip'
     
-    - name: Install dependencies
+    - name: 📦 Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest pytest-asyncio pytest-cov httpx
     
-    - name: Run tests
+    - name: 🔍 Run tests
       env:
         DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/gatewayguard
         REDIS_URL: redis://localhost:6379/0
-        JWT_SECRET: test-secret-key
+        JWT_SECRET: github-actions-test-secret-key-change-me
+        JWT_ALGORITHM: HS256
+        JWT_EXPIRE_MINUTES: 15
+        ENVIRONMENT: testing
+        LOG_LEVEL: INFO
+        ALLOWED_ORIGINS: http://localhost:3000,http://localhost:8000
       run: |
-        pytest tests/ -v --cov=app --cov-report=xml
+        pytest tests/ -v --cov=app --cov-report=xml --cov-report=term
     
-    - name: Upload coverage
+    - name: 📊 Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
         file: ./coverage.xml
-  
-  deploy:
-    needs: test
-    if: github.ref == 'refs/heads/main'
+        fail_ci_if_error: false
+      continue-on-error: true
+
+  lint:
+    name: 🔍 Lint Check
     runs-on: ubuntu-latest
     
     steps:
     - uses: actions/checkout@v4
     
-    - name: Deploy to EC2
-      env:
-        SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-        EC2_HOST: ${{ secrets.EC2_HOST }}
-        EC2_USER: ${{ secrets.EC2_USER }}
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-n: '3.13'
+    
+    - name: 📦 Install lint tools
       run: |
-        echo "$SSH_PRIVATE_KEY" > key.pem
-        chmod 600 key.pem
-        ssh -o StrictHostKeyChecking=no -i key.pem $EC2_USER@$EC2_HOST '
-          cd /opt/gatewayguard
-          git pull
-          docker compose down
-          docker compose up -d --build
-        '
+        pip install ruff
+    
+    - name: 🔍 Run Ruff linter
+      run: |
+        ruff check app/ --output-format=github || true
+    
+    - name: ✨ Check formatting
+      run: |
+        ruff format app/ --check || true
+
+  security:
+    name: 🔒 Security Scan
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: 🐍 Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-n: '3.13'
+    
+    - name: 📦 Install safety
+      run: |
+        pip install safety
+    
+    - name: 🔍 Check dependencies for vulnerabilities
+      run: |
+        safety check -r requirements.txt || true
+
+  # Deployment job - disabled until AWS is configured
+  # To enable:
+  # 1. Add AWS secrets to GitHub repository
+  # 2. Uncomment this job
+  # 3. Update the deploy script
+  #
+  # deploy:
+  #   na AWS
+  #   needs: [test, lint, security]
+  #   if: github.ref == 'refs/heads/main'
+  #   runs-on: ubuntu-latest
+  #   steps:
+  #     - name: 📥 Checkout code
+  #       uses: actions/checkout@v4
+  #     
+  #     - name: 🔑 Setup SSH key
+  #       run: |
+  #         mkdir -p ~/.ssh
+  #         echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+  #         chmod 600 ~/.ssh/id_rsa
+  #     
+  #     - name: 🚀 Deploy to EC2
+  #       run: |
+  #         ssh -o StrictHostKeyChecking=no ${{ secrets.EC2_USER }}@${{ secrets.EC2_HOST }} \
+  #           "cd /opt/gatewayguard && git pull && docker compose down && docker compose up -d --build"
