@@ -217,11 +217,3 @@ async def revoke_refresh_token(db: AsyncSession, token: str) -> None:
             await _mem_revoke_refresh_token(token)
             return
         raise
-def reset_memory_stores() -> None:
-    """Reset in-memory stores between tests."""
-    global _MEM_NEXT_USER_ID, _MEM_NEXT_REFRESH_TOKEN_ID
-    _MEM_USERS_BY_EMAIL.clear()
-    _MEM_USERS_BY_USERNAME.clear()
-    _MEM_REFRESH_TOKENS.clear()
-    _MEM_NEXT_USER_ID = 1
-    _MEM_NEXT_REFRESH_TOKEN_ID = 1
