@@ -1,0 +1,30 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: gatewayguard
+    ports:
+      - "5433:5432"  # Changed to port 5433 on your Mac
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - gatewayguard_network
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - gatewayguard_network
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  gatewayguard_network:
+    driver: bridge
