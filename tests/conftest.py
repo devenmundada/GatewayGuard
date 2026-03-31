@@ -68,7 +68,7 @@ async def setup_database():
 async def client():
     """Create test client for FastAPI app."""
     transport = ASGITransport(app=app)
-    async with AsyncClient(transport=tra, base_url="http://test") as client:
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
         yield client
 
 
