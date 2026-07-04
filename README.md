@@ -190,5 +190,4 @@ MIT License
 
 ---
 
-> Built for the **HENNGE Global Internship Program**
 > Focus: **real-world reliability, not just functionality**
