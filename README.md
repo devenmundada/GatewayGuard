@@ -280,4 +280,3 @@ If you found this useful, give it a ⭐ — it helps others discover the project
 ---
 
 > **Focus: real-world reliability, not just functionality.**
-> Built with ❤️ for the HENNGE Global Internship Program and Infosys DSE.
