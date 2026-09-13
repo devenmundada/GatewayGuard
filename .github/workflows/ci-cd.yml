@@ -52,6 +52,12 @@ jobs:
         pip install pytest pytest-asyncio pytest-cov httpx
         pip install email-validator pytest-timeout
     
+    - name: 🗄️ Run migrations
+      env:
+        DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/gatewayguard
+      run: |
+        alembic upgrade head
+
     - name: 🔍 Run tests
       env:
         DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/gatewayguard
