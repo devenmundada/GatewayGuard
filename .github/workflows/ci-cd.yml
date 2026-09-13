@@ -50,7 +50,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         pip install pytest pytest-asyncio pytest-cov httpx
-        pip install email-validator pytest-timeout
+        pip install email-validator pytest-timeout psycopg2-binary
     
     - name: 🗄️ Run migrations
       env:
