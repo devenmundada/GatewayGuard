@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gatewayguard
+  labels:
+    app: gatewayguard
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gatewayguard
+  template:
+    metadata:
+      labels:
+        app: gatewayguard
+    spec:
+      nodeSelector:
+        kubernetes.io/hostname: gg-app
+      containers:
+      - name: gatewayguard
+        image: docker.io/library/gatewayguard:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8000
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: gatewayguard-secrets
+              key: DATABASE_URL
+        - name: REDIS_URL
+          valueFrom:
+            secretKeyRef:
+              name: gatewayguard-secrets
+              key: REDIS_URL
+        - name: ENVIRONMENT
+          value: "production"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 15
+          periodSeconds: 5
+          failureThreshold: 3

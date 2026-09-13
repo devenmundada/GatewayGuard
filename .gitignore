@@ -56,3 +56,5 @@ locust_*.csv
 *.pyd
 *.swp
 *.swo
+hosts.ini
+*.yaml.bak

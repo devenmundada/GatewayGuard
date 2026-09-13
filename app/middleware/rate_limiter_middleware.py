@@ -29,6 +29,9 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
         logger.info("Rate limiter middleware initialized")
     
     async def dispatch(self, request: Request, call_next):
+        # Skip rate limiting for health and metrics endpoints
+        if request.url.path in ("/health", "/metrics"):
+            return await call_next(request)
         try:
             user_id = getattr(request.state, "user_id", None)
             

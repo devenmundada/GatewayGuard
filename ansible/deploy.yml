@@ -1,0 +1,98 @@
+---
+- name: Setup database server
+  hosts: db
+  become: true
+  tasks:
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+        update_cache: no
+
+    - name: Start and enable Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Open PostgreSQL port
+      ufw:
+        rule: allow
+        port: "5432"
+
+    - name: Run PostgreSQL container
+      docker_container:
+        name: postgres
+        image: postgres:16-alpine
+        state: started
+        restart_policy: always
+        ports:
+          - "5432:5432"
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gatewayguard
+
+- name: Setup cache server
+  hosts: cache
+  become: true
+  tasks:
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+        update_cache: no
+
+    - name: Start and enable Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Open Redis port
+      ufw:
+        rule: allow
+        port: "6379"
+
+    - name: Run Redis container
+      docker_container:
+        name: redis
+        image: redis:7-alpine
+        state: started
+        restart_policy: always
+        ports:
+          - "6379:6379"
+
+- name: Setup app server
+  hosts: app
+  become: true
+  tasks:
+    - name: Install Docker
+      apt:
+        name: docker.io
+        state: present
+        update_cache: no
+
+    - name: Start and enable Docker
+      service:
+        name: docker
+        state: started
+        enabled: yes
+
+    - name: Open app port
+      ufw:
+        rule: allow
+        port: "8000"
+
+    - name: Run GatewayGuard container
+      docker_container:
+        name: gatewayguard
+        image: gatewayguard
+        state: started
+        restart_policy: always
+        ports:
+          - "8000:8000"
+        env:
+          DATABASE_URL: "postgresql+asyncpg://postgres:postgres@192.168.252.3:5432/gatewayguard"
+          REDIS_URL: "redis://192.168.252.4:6379/0"
+          ENVIRONMENT: "production"
