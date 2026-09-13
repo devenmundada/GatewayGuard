@@ -1,282 +1,201 @@
-# 🚪 GatewayGuard — Production-Grade API Gateway
+# GatewayGuard — Production-Grade API Gateway Infrastructure
 
-[![Python 3.13](https://img.shields.io/badge/Python-3.13-blue.svg)](https://www.python.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green.svg)](https://fastapi.tiangolo.com/)
-[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-blue.svg)](https://www.postgresql.org/)
-[![Redis](https://img.shields.io/badge/Redis-7-red.svg)](https://redis.io/)
 [![Tests](https://img.shields.io/badge/Tests-17%2F17-brightgreen.svg)](https://github.com/devenmundada/GatewayGuard/actions)
-[![Load Test](https://img.shields.io/badge/Load-100%20users%20%7C%204ms-success.svg)](docs/performance.md)
+[![Python](https://img.shields.io/badge/Python-3.13-blue.svg)](https://www.python.org/)
+[![Kubernetes](https://img.shields.io/badge/Kubernetes-K3s%20v1.36-326CE5.svg)](https://k3s.io/)
+[![Ansible](https://img.shields.io/badge/Ansible-Automated-EE0000.svg)](https://www.ansible.com/)
+[![Prometheus](https://img.shields.io/badge/Prometheus-Monitored-E6522C.svg)](https://prometheus.io/)
 [![License](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-> **A production-ready API gateway that doesn't just work — it survives.**
-> Built with Redis fallback, circuit breakers, and consistent low-latency performance under load.
+> A production-grade API gateway deployed across a real 3-node infrastructure — not Docker Compose on a laptop, but a distributed system running across separate Linux servers with full automation, orchestration, and monitoring.
 
 ---
 
-## 📖 Table of Contents
+## Architecture
 
-- [📊 Performance at a Glance](#-performance-at-a-glance)
-- [🎯 What Makes This Different](#-what-makes-this-different)
-- [🏗️ Architecture](#️-architecture)
-- [🚀 Quick Start](#-quick-start)
-- [📚 API Endpoints](#-api-endpoints)
-- [🧪 Testing](#-testing)
-- [🛠️ Tech Stack](#️-tech-stack)
-- [🔒 Security Features](#-security-features)
-- [📈 Production Readiness](#-production-readiness)
-- [🤔 Engineering Trade-offs](#-engineering-trade-offs)
-- [📚 Documentation](#-documentation)
-- [👨‍💻 Author](#-author)
-- [📝 License](#-license)
-
----
-
-## 📊 Performance at a Glance
-
-| Metric | Result |
-|--------|--------|
-| **Concurrent Users** | 100 |
-| **Requests/Second** | 33.8 |
-| **Median Response** | **4ms** |
-| **95th Percentile** | 8ms |
-| **99th Percentile** | 12–28ms |
-| **Total Requests** | 16,460 |
-| **System Errors** | **0** |
-| **Rate Limited** | ~95% (expected) |
-
-> *RPS is intentionally limited by simulated user think-time (Locust wait_time). Actual system throughput is significantly higher under sustained load.*
-
-**[📊 Full Performance Analysis →](docs/performance.md)**
+\`\`\`
+Mac (Ansible / kubectl / Lens)
+                ▼
+┌─────────────────────────────────────────────┐
+│           Kubernetes Cluster (K3s)           │
+│                                             │
+│  gg-app (192.168.252.2)  — Control Plane   │
+│  ├── GatewayGuard pod (port 30080)          │
+│  ├── Subscriber Registry (port 8001)        │
+│  └── Health Aggregator (port 8002)          │
+│                                             │
+│  gg-db (192.168.252.3)   — Worker Node     │
+│  ├── PostgreSQL (port 5432)                 │
+│  ├── Prometheus pod (port 30090)            │
+│  └── Grafana pod (port 30030)               │
+│                                             │
+│  gg-cache (192.168.252.4) — Worker Node    │
+│  └── Redis (port 6379)                      │
+└─────────────────────────────────────────────┘
+\`\`\`
 
 ---
 
-## 🎯 What Makes This Different
+## What This Project Demonstrates
 
-| Scenario | Behavior |
-|----------|----------|
-| Redis crashes | Falls back to in-memory rate limiting automatically |
-| PostgreSQL down | Returns graceful 503 errors |
-| Slow downstream service | Circuit breaker prevents cascading failure |
-| DDoS attack | Rate limiting (100 req/min per IP) |
-| Debugging issues | Correlation IDs + structured JSON logs |
-
-> **This isn't a "happy path" project. It's built to survive failure.**
-
----
-
-## 🏗️ Architecture
-
-```mermaid
-flowchart TD
-    A[Client] --> B[API Gateway :8000]
-
-    subgraph Middleware Pipeline
-        C[Correlation ID Middleware]
-        D[Logging Middleware]
-        E[Auth Middleware]
-        F[Rate Limiter Middleware]
-    end
-
-    B --> C --> D --> E --> F
-
-    F --> G[Circuit Breaker]
-
-    G -->|Healthy| H[PostgreSQL]
-    G -->|Healthy| I[Redis]
-    G -->|OPEN| J[503 Service Unavailable]
-
-    I -->|Redis Down| K[In-Memory Fallback]
-
-    H --> L[Users / Tasks / Tokens]
-    I --> M[Rate Limit Counters]
-```
-
-**[📐 Full Architecture Deep Dive →](docs/architecture.md)**
+| Skill | Evidence |
+|-------|----------|
+| Linux / Unix | 3 Ubuntu VMs, SSH, firewalls, systemd |
+| Networking | Services communicate across real IPs |
+| Ansible | One command rebuilds entire environment |
+| Docker | Multi-container deployments, custom images |
+| Kubernetes | K3s cluster, self-healing, probes, secrets |
+| Prometheus | Metrics scraping, PromQL queries |
+| Grafana | Live dashboards, persistent storage |
+| Load Testing | 50 concurrent users, 6ms median latency |
+| Security | Kubernetes Secrets, rate limiting |
+| Telecom framing | Subscriber registry (HSS analog) |
 
 ---
 
-## 🚀 Quick Start
+## The Application
 
-```bash
-# 1. Clone the repository
+GatewayGuard is a FastAPI-based API gateway with:
+- JWT authentication with refresh token rotation
+- Redis-backed rate limiting with in-memory fallback
+- Circuit breaker pattern
+- Structured logging with correlation IDs
+- Prometheus metrics at /metrics
+- 17 passing automated tests
+- Load tested at 50 concurrent users — 6ms median latency
+
+---
+
+## Project Phases
+
+### Phase 0 — Linux Server Setup
+Provisioned 3 Ubuntu VMs using Multipass. Configured firewalls, SSH, and basic security on each machine manually to build real Linux fluency.
+
+### Phase 1 — Manual Multi-Node Deployment
+Deployed GatewayGuard across 3 separate VMs — app, database, and cache on separate machines. Services communicate using real IP addresses across network boundaries.
+
+\`\`\`bash
+curl http://192.168.252.2:8000/health
+# {"status":"healthy","checks":{"database":"ok","redis":"ok","gateway":"ok"}}
+\`\`\`
+
+### Phase 2 — Ansible Automation
+Wrote idempotent Ansible playbooks that fully automate provisioning and deployment across all 3 machines simultaneously. One command rebuilds the entire environment from scratch.
+
+\`\`\`bash
+ansible-playbook -i hosts.ini deploy.yml
+\`\`\`
+
+### Phase 3 — Companion Services
+Built two telecom-flavored services:
+- **Subscriber Registry** — tracks active subscriber sessions (analogous to a telecom HSS)
+- **Health Aggregator** — single endpoint reporting status of all services
+
+### Phase 4 — Kubernetes (K3s)
+Installed K3s across all 3 VMs. Migrated GatewayGuard to a Kubernetes Deployment with:
+- Liveness probe: checks /health every 10s, restarts pod on 3 consecutive failures
+- Readiness probe: checks /health every 5s, removes from traffic pool if failing
+- Kubernetes Secrets: credentials stored securely, never in YAML files
+- Self-healing demonstrated: deleted running pod, Kubernetes restarted it in ~10 seconds
+
+### Phase 5 — Prometheus + Grafana Monitoring
+Deployed monitoring stack as Kubernetes pods:
+- Prometheus scrapes /metrics every 15 seconds
+- Grafana displays live dashboards with persistent storage
+- Load tested with 50 concurrent users — watched memory, CPU, and GC activity spike live
+
+---
+
+## Load Test Results
+
+\`\`\`
+Total Requests:  1,438 in 120 seconds
+Request Rate:    12 req/s sustained
+Median Latency:  6ms
+95th Percentile: 13ms
+
+GET  /health    → 0% failure rate (rate-limit exempt)
+GET  /metrics   → 0% failure rate (rate-limit exempt)
+POST /login     → 429 rate-limited (correct behavior)
+POST /register  → 429 rate-limited (correct behavior)
+\`\`\`
+
+The 26% "failure rate" is the rate limiter correctly blocking auth endpoint spam — not crashes. Zero actual application errors.
+
+---
+
+## Real Problems Hit and Fixed
+
+| Problem | Root Cause | Fix |
+|---------|-----------|-----|
+| K3s stuck activating | 1 CPU insufficient for control plane | Increased to 2 CPUs |
+| Worker nodes not joining | UFW firewall blocking ports 6443, 8472, 10250 | Opened required ports |
+| Pod stuck Pending | Containerd uses fully-qualified image names | Updated image name in Deployment |
+| Rate limiter killing health probes | Kubernetes probes triggered 429s — 27 pod restarts | Exempted /health and /metrics |
+| Grafana dashboards lost on restart | Pod storage is ephemeral | Added PersistentVolumeClaim |
+| Disk pressure taint | 3 weeks idle accumulated garbage | Pruned images, removed taint |
+| Clock skew breaking Prometheus | VM clock drifted while idle | chronyc makestep |
+
+---
+
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Application | FastAPI, Python, Gunicorn, Uvicorn |
+| Database | PostgreSQL 16 |
+| Cache | Redis 7 |
+| Containers | Docker, containerd |
+| Orchestration | Kubernetes (K3s v1.36.3) |
+| Automation | Ansible |
+| Monitoring | Prometheus, Grafana |
+| Load Testing | Locust |
+| CI/CD | GitHub Actions |
+
+---
+
+## Repository Structure
+
+\`\`\`
+GatewayGuard/
+├── app/                    # FastAPI application
+├── ansible/                # Ansible playbooks for automation
+├── kubernetes/             # Kubernetes manifests
+│   ├── gatewayguard-deployment.yaml
+│   ├── gatewayguard-service.yaml
+│   └── monitoring/
+│       ├── prometheus-config.yaml
+│       ├── prometheus-deployment.yaml
+│       ├── grafana-deployment.yaml
+│       └── grafana-pvc.yaml
+├── services/               # Companion services
+│   ├── subscriber-registry/
+│   └── health-aggregator/
+├── tests/                  # 17 passing tests
+├── locustfile.py           # Load test configuration
+└── Dockerfile.prod         # Production Docker image
+\`\`\`
+
+---
+
+## Quick Start (Local Development)
+
+\`\`\`bash
 git clone https://github.com/devenmundada/GatewayGuard.git
 cd GatewayGuard
-
-# 2. Create virtual environment
-python3.13 -m venv venv
-source venv/bin/activate        # Windows: venv\Scripts\activate
-
-# 3. Install dependencies
+python3 -m venv venv
+source venv/bin/activate
 pip install -r requirements.txt
-
-# 4. Configure environment
-cp .env.example .env            # Edit .env with your settings
-
-# 5. Start PostgreSQL + Redis
 docker compose up -d
-
-# 6. Run database migrations
 alembic upgrade head
-
-# 7. Start the gateway
 uvicorn app.main:app --reload --port 8000
-```
-
-| URL | Purpose |
-|-----|---------|
-| http://localhost:8000 | API Gateway |
-| http://localhost:8000/docs | Interactive API Docs (Swagger) |
-| http://localhost:8000/metrics | Prometheus Metrics |
-| http://localhost:8000/health | Health Check |
-
-**[🛠️ Full Development Guide →](docs/development.md)**
+\`\`\`
 
 ---
 
-## 📚 API Endpoints
+## Author
 
-| Method | Endpoint | Auth Required | Rate Limit | Description |
-|--------|----------|:-------------:|:----------:|-------------|
-| `POST` | `/api/v1/auth/register` | ❌ | 10/min | Create account |
-| `POST` | `/api/v1/auth/login` | ❌ | 10/min | Get JWT tokens |
-| `POST` | `/api/v1/auth/refresh` | ❌ | 10/min | Refresh access token |
-| `POST` | `/api/v1/auth/logout` | ✅ | 10/min | Revoke refresh token |
-| `GET` | `/api/v1/tasks` | ✅ | 200/min | List user tasks |
-| `POST` | `/api/v1/tasks` | ✅ | 200/min | Create a task |
-| `GET` | `/health` | ❌ | 100/min | Liveness + readiness |
-| `GET` | `/metrics` | ❌ | 100/min | Prometheus metrics |
-
----
-
-## 🧪 Testing
-
-```bash
-# Run all tests
-pytest tests/ -v
-
-# With coverage report
-pytest tests/ --cov=app --cov-report=html
-
-# Run load tests (open http://localhost:8089 to configure)
-locust -f locustfile.py --host=http://localhost:8000
-```
-
-### Results
-
-| Test | Result |
-|------|--------|
-| Unit & Integration Tests | ✅ 17/17 passing |
-| Concurrent Users | ✅ 100 |
-| Median Latency | ✅ 4ms |
-| 95th Percentile | ✅ 8ms |
-| System Errors | ✅ 0 |
-
-**[🔬 Full Load Test Analysis →](docs/performance.md)**
-
----
-
-## 🛠️ Tech Stack
-
-| Layer | Technology | Version | Why |
-|-------|-----------|---------|-----|
-| Framework | FastAPI | 0.115.0 | Async, auto OpenAPI docs |
-| Server | Uvicorn | 0.30.0 | ASGI, multi-worker |
-| Database | PostgreSQL | 16 | ACID compliance for auth |
-| Cache | Redis | 7 | Atomic ops + TTL |
-| ORM | SQLAlchemy | 2.0.35 | Async ORM |
-| Auth | python-jose | 3.3.0 | JWT handling |
-| Hashing | passlib | 1.7.4 | pbkdf2_sha256 |
-| Logging | python-json-logger | 2.0.7 | Structured JSON logs |
-| Metrics | prometheus-client | 0.20.0 | Prometheus exposition |
-| Testing | pytest + locust | 8.0.0 | Unit, integration, load |
-| CI/CD | GitHub Actions | — | Automated pipeline |
-| Container | Docker Compose | — | One-command setup |
-
-**[🧩 Full Technology Breakdown →](docs/architecture.md#technology-stack)**
-
----
-
-## 🔒 Security Features
-
-| Feature | Implementation | Detail |
-|---------|---------------|--------|
-| Password hashing | pbkdf2_sha256 | Via passlib, no plaintext ever stored |
-| Access tokens | JWT (HS256) | 15 min expiry + jti for replay prevention |
-| Refresh tokens | DB-stored | 7 days, revocable, single-use rotation |
-| Rate limiting | Redis + fallback | Per-user (200/min) and per-IP (100/min) |
-| Brute force protection | Auth rate limit | 10 attempts/min → 429 |
-| Input validation | Pydantic v2 | All endpoints validated at schema level |
-| SQL injection | SQLAlchemy ORM | No raw queries |
-| CORS | FastAPI middleware | Configurable per environment |
-
-**[🔐 Full Security Architecture + Threat Model →](docs/security.md)**
-
----
-
-## 📈 Production Readiness
-
-| Feature | Status | Notes |
-|---------|:------:|-------|
-| Graceful degradation | ✅ | Redis down → memory fallback |
-| Structured observability | ✅ | JSON logs + correlation IDs |
-| Health checks | ✅ | Liveness + readiness at /health |
-| Circuit breaker | ✅ | CLOSED → OPEN → HALF-OPEN |
-| CI/CD pipeline | ✅ | GitHub Actions on every push |
-| Docker support | ✅ | docker compose up -d |
-| OpenAPI docs | ✅ | Auto-generated at /docs |
-| Prometheus metrics | ✅ | Exposed at /metrics |
-
----
-
-## 🤔 Engineering Trade-offs
-
-| Decision | Chosen | Alternative | Why |
-|----------|--------|-------------|-----|
-| Web framework | FastAPI | Flask | Native async, 6x faster |
-| Database | PostgreSQL | MongoDB | ACID compliance for auth data |
-| Rate limit store | Redis | Database | Atomic INCR + TTL, <1ms |
-| Rate limit fallback | In-memory dict | Fail open | Graceful degradation |
-| Password hashing | pbkdf2_sha256 | bcrypt | No C compiler needed in CI |
-| Rate limit algorithm | Fixed window | Sliding window | Simpler, acceptable trade-off |
-
-**[📐 More design decisions →](docs/architecture.md#design-decisions)**
-
----
-
-## 📚 Documentation
-
-| Document | What's inside |
-|----------|--------------|
-| [🏗️ Architecture Deep Dive](docs/architecture.md) | System design, middleware pipeline, DB schema, Mermaid diagrams |
-| [📊 Performance Analysis](docs/performance.md) | Load test methodology, endpoint breakdown, latency analysis |
-| [🚦 Rate Limiting Deep Dive](docs/rate-limiting.md) | Redis fallback mechanism, algorithm trade-offs, failure scenarios |
-| [🔒 Security Architecture](docs/security.md) | Auth flow, JWT strategy, threat model, incident response |
-| [🗺️ Roadmap](docs/roadmap.md) | v1.0 features, Phase 1–5 improvements, future ideas |
-| [🛠️ Development Guide](docs/development.md) | Local setup, migrations, debugging, common issues |
-| [🤝 Contributing](CONTRIBUTING.md) | How to contribute, commit format, code standards |
-| [🔒 Security Policy](SECURITY.md) | Vulnerability reporting, supported versions |
-
----
-
-## 👨‍💻 Author
-
-**Deven Mundada**
+**Deven Mundada** — built as a hands-on infrastructure engineering project targeting Nokia Solution Architect Trainee and infrastructure engineering roles.
 
 [![GitHub](https://img.shields.io/badge/GitHub-181717?style=flat&logo=github&logoColor=white)](https://github.com/devenmundada)
 [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=flat&logo=linkedin&logoColor=white)](https://linkedin.com/in/devenmundada)
-
----
-
-## 📝 License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
----
-
-## ⭐ Star the Project
-
-If you found this useful, give it a ⭐ — it helps others discover the project!
-
----
-
-> **Focus: real-world reliability, not just functionality.**
