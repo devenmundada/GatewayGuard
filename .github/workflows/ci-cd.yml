@@ -52,11 +52,19 @@ jobs:
         pip install pytest pytest-asyncio pytest-cov httpx
         pip install email-validator pytest-timeout psycopg2-binary
     
-    - name: 🗄️ Run migrations
+    - name: 🗄️ Create tables
       env:
         DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/gatewayguard
-      run: |
-        alembic upgrade head
+        REDIS_URL: redis://localhost:6379/0
+        JWT_SECRET: github-actions-test-secret-key
+        JWT_ALGORITHM: HS256
+        JWT_EXPIRE_MINUTES: 15
+        ENVIRONMENT: testing
+        LOG_LEVEL: INFO
+        ALLOWED_ORIGINS: http://localhost:3000,http://localhost:8000
+        PYTHONPATH: .
+      run: python scripts/ci_create_tables.py
+
 
     - name: 🔍 Run tests
       env:

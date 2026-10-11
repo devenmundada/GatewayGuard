@@ -32,9 +32,11 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
         # Skip rate limiting for health and metrics endpoints
         if request.url.path in ("/health", "/metrics"):
             return await call_next(request)
+
+        # Only the limiter's own logic is inside the try block.
         try:
             user_id = getattr(request.state, "user_id", None)
-            
+
             if user_id:
                 key = f"rl:user:{user_id}"
                 limit_config = LIMITS["authenticated"]
@@ -45,29 +47,30 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
                     limit_config = LIMITS["auth"]
                 else:
                     limit_config = LIMITS["default"]
-            
+
             allowed, remaining = self.rate_limiter.check_rate_limit(
                 key,
                 limit=limit_config["limit"],
                 window=limit_config["window"]
             )
-            
-            if not allowed:
-                return JSONResponse(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    content={
-                        "detail": f"Rate limit exceeded. Limit: {limit_config['limit']} per {limit_config['window']} seconds.",
-                        "limit": limit_config["limit"],
-                        "remaining": 0
-                    }
-                )
-            
-            response = await call_next(request)
-            response.headers["X-RateLimit-Limit"] = str(limit_config["limit"])
-            response.headers["X-RateLimit-Remaining"] = str(remaining)
-            return response
-            
         except Exception as e:
+            # The limiter itself broke, and call_next has not run yet.
+            # Fail open: let the request through, exactly once.
             logger.error(f"Rate limiter error: {e}", exc_info=True)
-            # Fail open - allow request
             return await call_next(request)
+
+        if not allowed:
+            return JSONResponse(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                content={
+                    "detail": f"Rate limit exceeded. Limit: {limit_config['limit']} per {limit_config['window']} seconds.",
+                    "limit": limit_config["limit"],
+                    "remaining": 0
+                }
+            )
+
+        # Errors from the app propagate normally instead of triggering a second call.
+        response = await call_next(request)
+        response.headers["X-RateLimit-Limit"] = str(limit_config["limit"])
+        response.headers["X-RateLimit-Remaining"] = str(remaining)
+        return response
