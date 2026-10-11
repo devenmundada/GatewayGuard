@@ -6,8 +6,7 @@
 
 *Not a tutorial project. A complete, end-to-end system running across 3 real Linux servers with automation, orchestration, and live monitoring.*
 
-[![CI](https://github.com/devenmundada/GatewayGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/devenmundada/GatewayGuard/actions)
-[![Tests](https://img.shields.io/badge/Tests-17%2F17%20Passing-brightgreen?style=flat-square)](https://github.com/devenmundada/GatewayGuard/actions)
+[![CI](https://github.com/devenmundada/GatewayGuard/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/devenmundada/GatewayGuard/actions)
 [![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![Kubernetes](https://img.shields.io/badge/Kubernetes-K3s%20v1.36-326CE5?style=flat-square&logo=kubernetes&logoColor=white)](https://k3s.io)
 [![Ansible](https://img.shields.io/badge/Ansible-Automated-EE0000?style=flat-square&logo=ansible&logoColor=white)](https://ansible.com)
@@ -288,7 +287,7 @@ python3 -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 
 docker compose up -d        # Start PostgreSQL + Redis
-alembic upgrade head        # Run migrations
+python create_tables.py     # Create database tables
 uvicorn app.main:app --reload --port 8000
 ```
 
