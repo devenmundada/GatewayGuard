@@ -30,7 +30,7 @@ class RateLimiterMiddleware(BaseHTTPMiddleware):
     
     async def dispatch(self, request: Request, call_next):
         # Skip rate limiting for health and metrics endpoints
-        if request.url.path in ("/health", "/metrics"):
+        if request.url.path.startswith(("/health", "/metrics")):
             return await call_next(request)
 
         # Only the limiter's own logic is inside the try block.
