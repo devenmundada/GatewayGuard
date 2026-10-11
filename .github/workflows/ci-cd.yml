@@ -98,10 +98,32 @@ jobs:
   docker:
     name: Docker image
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gatewayguard
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
     - uses: actions/checkout@v4
     - name: Build production image
       run: docker build -f Dockerfile.prod -t gatewayguard:ci .
+
+    - name: Migrations run inside the image (runtime dependencies only)
+      run: |
+        docker run --rm --network host \
+          -e ENVIRONMENT=production \
+          -e JWT_SECRET=ci-smoke-test-secret-that-is-long-enough-123456 \
+          -e DATABASE_URL=postgresql+asyncpg://postgres:postgres@localhost:5432/gatewayguard \
+          gatewayguard:ci python scripts/migrate.py
 
     - name: Image refuses to start without a real JWT secret
       run: |
