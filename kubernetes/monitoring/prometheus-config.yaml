@@ -8,6 +8,10 @@ data:
     global:
       scrape_interval: 15s
       evaluation_interval: 15s
+    alerting:
+      alertmanagers:
+        - static_configs:
+            - targets: ['192.168.252.3:30093']
     rule_files:
       - /etc/prometheus/alert-rules.yml
     scrape_configs:
