@@ -58,3 +58,4 @@ locust_*.csv
 *.swo
 hosts.ini
 *.yaml.bak
+ansible/secrets.yml
