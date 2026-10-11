@@ -36,16 +36,16 @@ class TestRateLimiting:
         print("✅ Exempt endpoints correctly have no rate limit headers")
 
     @pytest.mark.asyncio
-    async def test_rate_limit_headers_on_auth_endpoints(self, client):
-        """Test that non-exempt endpoints return rate limit headers."""
-        response = await client.post(
-            "/api/v1/auth/login",
-            json={
-                "email": "nonexistent@example.com",
-                "password": "wrongpassword"
-            }
-        )
+    async def test_auth_endpoint_is_rate_limited(self, client):
+        """Auth endpoints enforce a stricter limit (10/min) and return 429 once exceeded."""
+        status_codes = []
+        for _ in range(15):
+            response = await client.post(
+                "/api/v1/auth/login",
+                json={"email": "nobody@example.com", "password": "wrongpassword"},
+            )
+            status_codes.append(response.status_code)
 
-        # Should get a response (401 or 422) but not a 429 on first request
-        assert response.status_code != 429
-        print(f"✅ Auth endpoint responded with {response.status_code} on first request")
+        # Whatever budget earlier tests used, 15 requests must exceed a 10/min limit.
+        assert 429 in status_codes
+        print(f"Auth endpoint limited as expected: {status_codes.count(429)} of 15 requests got 429")
