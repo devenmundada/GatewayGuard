@@ -26,8 +26,8 @@ GatewayGuard is a **production-grade API gateway** that implements the **Gateway
 **Role**: HTTP request routing and processing engine.
 
 **Implementation Details**:
-- **Framework**: FastAPI 0.115.0 (ASGI-based)
-- **Server**: Uvicorn with multiple workers for concurrency
+- **Framework**: FastAPI (ASGI-based)
+- **Server**: Gunicorn managing Uvicorn workers (2 by default, `WEB_CONCURRENCY` to change)
 - **Middleware Stack**: Chain of Responsibility pattern
 - **Dependency Injection**: Built-in FastAPI DI for database sessions and Redis clients
 
@@ -45,7 +45,9 @@ GatewayGuard is a **production-grade API gateway** that implements the **Gateway
 
 **Role**: Validate JWT tokens and extract user identity.
 
-**Public Paths**: /health, /metrics, /api/v1/auth/register, /api/v1/auth/login
+**Public paths** (exact match): `/`, `/health`, `/health/live`, `/health/ready`, `/metrics`, `/docs`, `/redoc`, `/openapi.json`, and `/api/v1/auth/{register,login,refresh,logout}`.
+
+**Order** (outermost first): CORS, CorrelationID, Logging, Metrics, Auth, RateLimiter, route. Starlette wraps in reverse of registration, so `main.py` registers them in the opposite order.
 
 #### d. Rate Limiter Middleware
 
@@ -70,31 +72,30 @@ Key Structure:
 
 #### c. Memory Fallback
 
-Triggered when Redis connection fails. Uses in-memory dict with timestamps.
+Used while the circuit breaker around Redis is OPEN. Per-process fixed-window counters; see rate-limiting.md.
 
 ## Failure Handling
 
 | Failure Scenario | Detection | Recovery |
 |-----------------|-----------|----------|
-| **Redis Down** | Connection timeout (2s) | In-memory fallback |
-| **PostgreSQL Down** | Connection pool exhaustion | 503 Service Unavailable |
-| **Downstream Slow** | Request timeout | Circuit breaker opens |
+| **Redis Down** | Circuit breaker opens after 3 failures (1 s socket timeout) | In-memory fallback; retried automatically after 10 s |
+| **PostgreSQL Down** | Connect error / pool timeout (5 s) | 503 + `Retry-After`; `/health/ready` fails so Kubernetes removes the pod from the Service (liveness is unaffected, no restarts) |
 | **JWT Expired** | Signature verification fails | 401 with refresh guidance |
-| **Rate Limit Exceeded** | Counter > limit | 429 with retry headers |
+| **Rate Limit Exceeded** | Counter > limit | 429 with `Retry-After` |
 
 ## Technology Stack
 
 | Layer | Technology | Version | Purpose |
 |-------|-----------|---------|---------|
-| **Framework** | FastAPI | 0.115.0 | Async web framework |
+| **Framework** | FastAPI / Starlette | 0.143.0 / 1.7.0 | Async web framework |
 | **Server** | Uvicorn | 0.30.0 | ASGI server |
 | **ORM** | SQLAlchemy | 2.0.35 | Async database ORM |
 | **Database** | PostgreSQL | 16.0 | Primary data store |
 | **Cache** | Redis | 7.0 | Rate limiting state |
-| **Auth** | python-jose | 3.3.0 | JWT handling |
+| **Auth** | PyJWT | 2.15.1 | JWT handling |
 | **Hashing** | passlib | 1.7.4 | Password hashing |
 | **Logging** | python-json-logger | 2.0.7 | Structured logging |
 | **Metrics** | prometheus-client | 0.20.0 | Prometheus exposition |
-| **Testing** | pytest | 8.0.0 | Unit & integration tests |
+| **Testing** | pytest | 9.1.1 | Unit & integration tests |
 | **Container** | Docker | Latest | Containerization |
 | **CI/CD** | GitHub Actions | Latest | Automated pipeline |

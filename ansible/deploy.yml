@@ -1,7 +1,28 @@
 ---
+# Passwords come from ansible/secrets.yml (gitignored; see secrets.yml.example).
+# Run:  ansible-playbook -i hosts.ini deploy.yml   (add --ask-vault-pass if secrets.yml is encrypted)
+# Open the cluster ports every node needs (pod networking + kubelet) on all hosts.
+- name: Open Kubernetes node ports
+  hosts: all
+  become: true
+  tasks:
+    - name: Flannel VXLAN (pod-to-pod traffic between nodes)
+      ufw:
+        rule: allow
+        port: "8472"
+        proto: udp
+
+    - name: Kubelet API
+      ufw:
+        rule: allow
+        port: "10250"
+        proto: tcp
+
 - name: Setup database server
   hosts: db
   become: true
+  vars_files:
+    - secrets.yml
   tasks:
     - name: Install Docker
       apt:
@@ -21,6 +42,7 @@
         port: "5432"
 
     - name: Run PostgreSQL container
+      no_log: true   # do not print the password in Ansible output
       docker_container:
         name: postgres
         image: postgres:16-alpine
@@ -30,7 +52,7 @@
           - "5432:5432"
         env:
           POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
+          POSTGRES_PASSWORD: "{{ db_password }}"
           POSTGRES_DB: gatewayguard
 
 - name: Setup cache server
@@ -66,6 +88,8 @@
 - name: Setup app server
   hosts: app
   become: true
+  vars_files:
+    - secrets.yml
   tasks:
     - name: Install Docker
       apt:
@@ -85,6 +109,7 @@
         port: "8000"
 
     - name: Run GatewayGuard container
+      no_log: true
       docker_container:
         name: gatewayguard
         image: gatewayguard
@@ -93,6 +118,7 @@
         ports:
           - "8000:8000"
         env:
-          DATABASE_URL: "postgresql+asyncpg://postgres:postgres@192.168.252.3:5432/gatewayguard"
+          DATABASE_URL: "postgresql+asyncpg://postgres:{{ db_password }}@192.168.252.3:5432/gatewayguard"
+          JWT_SECRET: "{{ jwt_secret }}"
           REDIS_URL: "redis://192.168.252.4:6379/0"
           ENVIRONMENT: "production"

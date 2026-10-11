@@ -1,0 +1,43 @@
+# Applies database migrations using the same image as the app.
+# Run it on every deploy, BEFORE restarting the app (scripts/deploy.sh does this):
+#   kubectl delete job gatewayguard-migrate --ignore-not-found
+#   kubectl apply -f kubernetes/migrate-job.yaml
+#   kubectl wait --for=condition=complete job/gatewayguard-migrate --timeout=120s
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: gatewayguard-migrate
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 3600
+  template:
+    spec:
+      restartPolicy: Never
+      nodeSelector:
+        kubernetes.io/hostname: gg-app
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+      - name: migrate
+        image: docker.io/library/gatewayguard:latest
+        imagePullPolicy: Never
+        command: ["python", "scripts/migrate.py"]
+        env:
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: gatewayguard-secrets
+              key: DATABASE_URL
+        - name: ENVIRONMENT
+          value: "production"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: gatewayguard-secrets
+              key: JWT_SECRET
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]

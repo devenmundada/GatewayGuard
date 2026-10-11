@@ -5,6 +5,8 @@ metadata:
   namespace: default
 spec:
   replicas: 1
+  strategy:
+    type: Recreate   # the data volume can only be used by one Prometheus at a time
   selector:
     matchLabels:
       app: prometheus
@@ -15,21 +17,49 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: gg-db
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
       containers:
       - name: prometheus
-        image: prom/prometheus:latest
-        imagePullPolicy: Always
+        image: prom/prometheus:v2.55.1   # pinned: "latest" can change under you on any pull
+        imagePullPolicy: IfNotPresent
         ports:
         - containerPort: 9090
         args:
         - "--config.file=/etc/prometheus/prometheus.yml"
+        - "--storage.tsdb.path=/prometheus"
+        - "--storage.tsdb.retention.time=7d"
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            memory: 512Mi
+        readinessProbe:
+          httpGet:
+            path: /-/ready
+            port: 9090
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /-/healthy
+            port: 9090
+          periodSeconds: 20
+          failureThreshold: 5
         volumeMounts:
         - name: prometheus-config
           mountPath: /etc/prometheus
+        - name: prometheus-data
+          mountPath: /prometheus
       volumes:
       - name: prometheus-config
         configMap:
           name: prometheus-config
+      - name: prometheus-data
+        persistentVolumeClaim:
+          claimName: prometheus-storage
 ---
 apiVersion: v1
 kind: Service

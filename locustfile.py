@@ -99,11 +99,19 @@ class GatewayGuardUser(HttpUser):
                              name="/api/v1/auth/login")
     
     @task(1)
-    def refresh_token(self):
-        """Refresh token endpoint."""
+    def refresh_session(self):
+        """Refresh endpoint. The old refresh token is single-use, so keep the new one."""
         if self.refresh_token:
-            self.client.post(f"/api/v1/auth/refresh?refresh_token={self.refresh_token}",
-                             name="/api/v1/auth/refresh")
+            with self.client.post(
+                "/api/v1/auth/refresh",
+                json={"refresh_token": self.refresh_token},
+                name="/api/v1/auth/refresh",
+                catch_response=True,
+            ) as response:
+                if response.status_code == 200:
+                    self.refresh_token = response.json()["refresh_token"]
+                elif response.status_code == 429:
+                    response.success()  # rate limited: expected under load, not a bug
 
 @events.test_start.add_listener
 def on_test_start(environment, **kwargs):

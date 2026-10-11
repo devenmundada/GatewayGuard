@@ -1,0 +1,13 @@
+# Prometheus keeps its time series on disk. Without a volume every pod restart wiped all
+# history (graphs started again from zero).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: prometheus-storage
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 2Gi

@@ -2,12 +2,14 @@
 Middleware to log requests with correlation ID.
 """
 
-import time
 import logging
+import time
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.types import ASGIApp
+
+from app.utils.client_ip import get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,7 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 "correlation_id": correlation_id,
                 "method": request.method,
                 "path": request.url.path,
-                "client_ip": request.client.host if request.client else None,
+                "client_ip": get_client_ip(request),
             }
         )
 
@@ -41,6 +43,8 @@ class LoggingMiddleware(BaseHTTPMiddleware):
                 "Request completed",
                 extra={
                     "correlation_id": correlation_id,
+                    "method": request.method,
+                    "path": request.url.path,
                     "status_code": response.status_code,
                     "duration_ms": round(process_time * 1000, 2),
                 }

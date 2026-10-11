@@ -1,4 +1,4 @@
-name: CI/CD Pipeline
+name: CI
 
 on:
   push:
@@ -6,11 +6,18 @@ on:
   pull_request:
     branches: [ main, master ]
 
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.13"   # same as Dockerfile.prod, so CI tests what actually runs
+
 jobs:
   test:
-    name: 🧪 Test Suite
+    name: Tests
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 15
+
     services:
       postgres:
         image: postgres:16-alpine
@@ -25,7 +32,7 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-      
+
       redis:
         image: redis:7-alpine
         ports:
@@ -35,88 +42,83 @@ jobs:
           --health-interval 10s
           --health-timeout 5s
           --health-retries 5
-    
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/gatewayguard
+      REDIS_URL: redis://localhost:6379/0
+      JWT_SECRET: github-actions-test-secret-key-at-least-32-bytes
+      ENVIRONMENT: testing
+      LOG_LEVEL: WARNING
+      PYTHONPATH: .
+
     steps:
-    - name: 📥 Checkout code
-      uses: actions/checkout@v4
-    
-    - name: 🐍 Set up Python 3.12
-      uses: actions/setup-python@v5
+    - uses: actions/checkout@v4
+
+    - uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
-    
-    - name: 📦 Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        pip install -r requirements.txt
-        pip install pytest pytest-asyncio pytest-cov httpx
-        pip install email-validator pytest-timeout psycopg2-binary
-    
-    - name: 🗄️ Create tables
-      env:
-        DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/gatewayguard
-        REDIS_URL: redis://localhost:6379/0
-        JWT_SECRET: github-actions-test-secret-key
-        JWT_ALGORITHM: HS256
-        JWT_EXPIRE_MINUTES: 15
-        ENVIRONMENT: testing
-        LOG_LEVEL: INFO
-        ALLOWED_ORIGINS: http://localhost:3000,http://localhost:8000
-        PYTHONPATH: .
-      run: python scripts/ci_create_tables.py
+        python-version: ${{ env.PYTHON_VERSION }}
+        cache: pip
+        cache-dependency-path: requirements*.txt
 
+    - name: Install dependencies (exact pinned versions, no overrides)
+      run: pip install -r requirements-dev.txt
 
-    - name: 🔍 Run tests
-      env:
-        DATABASE_URL: postgresql+asyncpg://postgres:postgres@localhost:5432/gatewayguard
-        REDIS_URL: redis://localhost:6379/0
-        JWT_SECRET: github-actions-test-secret-key
-        JWT_ALGORITHM: HS256
-        JWT_EXPIRE_MINUTES: 15
-        ENVIRONMENT: testing
-        LOG_LEVEL: INFO
-        ALLOWED_ORIGINS: http://localhost:3000,http://localhost:8000
-        PYTHONPATH: .
+    - name: Migrate database (tests the real migrations, not create_all)
       run: |
-        pytest tests/ -v --cov=app --cov-report=xml --cov-report=term --timeout=60
-      continue-on-error: false
+        python scripts/migrate.py
+        alembic check   # fails if the models changed without a new migration
+
+    - name: Run tests
+      run: pytest tests/ -v --cov=app --cov-report=term --timeout=60
 
   lint:
-    name: 🔍 Lint Check
+    name: Lint
     runs-on: ubuntu-latest
-    
     steps:
     - uses: actions/checkout@v4
-    
-    - name: 🐍 Set up Python 3.12
-      uses: actions/setup-python@v5
+    - uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
-    - name: 📦 Install ruff --upgrade
-      run: |
-        pip install ruff --upgrade
-    
-    - name: 🔍 Run Ruff linter
-      run: |
-        ruff check app/ --output-format=github --fix
+        python-version: ${{ env.PYTHON_VERSION }}
+    - run: pip install ruff==0.17.0
+    # No --fix: CI must fail on problems, not silently repair them and go green.
+    - run: ruff check app/ tests/ scripts/ --output-format=github
 
   security:
-    name: 🔒 Security Scan
+    name: Dependency audit
     runs-on: ubuntu-latest
-    
     steps:
     - uses: actions/checkout@v4
-    
-    - name: 🐍 Set up Python 3.12
-      uses: actions/setup-python@v5
+    - uses: actions/setup-python@v5
       with:
-        python-version: '3.12'
-    
-    - name: 📦 Install safety
+        python-version: ${{ env.PYTHON_VERSION }}
+    - run: pip install pip-audit==2.9.0
+    # Blocking on purpose: a known-vulnerable dependency fails the build.
+    - run: pip-audit -r requirements.txt
+
+  docker:
+    name: Docker image
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - name: Build production image
+      run: docker build -f Dockerfile.prod -t gatewayguard:ci .
+
+    - name: Image refuses to start without a real JWT secret
       run: |
-        pip install safety
-    
-    - name: 🔍 Check dependencies
+        if docker run --rm -e ENVIRONMENT=production gatewayguard:ci \
+             python -c "import app.config" 2>/dev/null; then
+          echo "FAIL: production image started with the default JWT secret"; exit 1
+        fi
+
+    - name: Image runs as non-root and answers /health/live
       run: |
-        safety check -r requirements.txt --ignore=70612 --ignore=51457
-      continue-on-error: true
+        docker run -d --name gg -p 8000:8000 \
+          -e ENVIRONMENT=production \
+          -e JWT_SECRET=ci-smoke-test-secret-that-is-long-enough-123456 \
+          gatewayguard:ci
+        test "$(docker exec gg id -u)" != "0"
+        for i in $(seq 1 20); do
+          curl -fs http://localhost:8000/health/live && exit 0
+          sleep 2
+        done
+        docker logs gg; exit 1

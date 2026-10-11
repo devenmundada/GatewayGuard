@@ -1,18 +1,32 @@
 FROM python:3.13-slim
 
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PYTHONPATH=/app \
+    PROMETHEUS_MULTIPROC_DIR=/tmp/prometheus
+
 WORKDIR /app
 
-# Install system dependencies
-RUN apt-get update && apt-get install -y \
-    gcc \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements and install
+# Runtime dependencies only (no compiler: every dependency ships a wheel).
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --only-binary=:all: -r requirements.txt
 
-# Copy application
-COPY . .
+# Application code only (see .dockerignore): no tests, docs, kubernetes manifests, .git
+COPY app/ app/
+COPY migrations/ migrations/
+COPY scripts/migrate.py scripts/migrate.py
+COPY alembic.ini gunicorn.conf.py ./
 
-# Run with gunicorn for production
-CMD ["gunicorn", "app.main:app", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8000"]
+# Do not run as root: a compromised app should not own the container.
+RUN useradd --system --uid 10001 --no-create-home appuser \
+    && mkdir -p /tmp/prometheus && chown appuser /tmp/prometheus
+USER 10001
+
+EXPOSE 8000
+
+# Liveness only (never depends on PostgreSQL): "is the process answering?"
+HEALTHCHECK --interval=30s --timeout=3s --start-period=20s --retries=3 \
+    CMD ["python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/live', timeout=2)"]
+
+CMD ["gunicorn", "app.main:app", "-c", "gunicorn.conf.py"]

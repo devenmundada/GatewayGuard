@@ -13,7 +13,7 @@ class TestRateLimiting:
         status_codes = []
 
         # Make 110 requests to /health — should never get rate limited
-        for i in range(110):
+        for _i in range(110):
             response = await client.get("/health")
             status_codes.append(response.status_code)
 
@@ -23,7 +23,6 @@ class TestRateLimiting:
 
         assert success_count == 110
         assert rate_limited_count == 0
-        print(f"✅ /health exempt from rate limiting: {success_count} success, {rate_limited_count} rate limited")
 
     @pytest.mark.asyncio
     async def test_rate_limit_headers_not_on_exempt_endpoints(self, client):
@@ -48,4 +47,3 @@ class TestRateLimiting:
 
         # Whatever budget earlier tests used, 15 requests must exceed a 10/min limit.
         assert 429 in status_codes
-        print(f"Auth endpoint limited as expected: {status_codes.count(429)} of 15 requests got 429")

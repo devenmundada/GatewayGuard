@@ -2,22 +2,25 @@
 SQLAlchemy models for database tables.
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from sqlalchemy import (
-    Column,
-    Integer,
-    String,
     Boolean,
+    Column,
     DateTime,
     ForeignKey,
+    Integer,
+    String,
     Text,
 )
 from sqlalchemy.orm import relationship
+
 from app.db.database import Base
 
+
 def utc_now():
-    """Return naive UTC datetime (no timezone info)."""
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    """Return naive UTC datetime (columns are TIMESTAMP WITHOUT TIME ZONE)."""
+    return datetime.now(UTC).replace(tzinfo=None)
 
 class User(Base):
     """User account table."""
@@ -52,7 +55,9 @@ class Task(Base):
     title = Column(String(255), nullable=False)
     description = Column(Text)
     completed = Column(Boolean, default=False)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     created_at = Column(DateTime, default=utc_now)
     updated_at = Column(DateTime, default=utc_now, onupdate=utc_now)
 
@@ -65,8 +70,12 @@ class RefreshToken(Base):
     __tablename__ = "refresh_tokens"
 
     id = Column(Integer, primary_key=True, index=True)
-    token = Column(String(500), unique=True, nullable=False, index=True)
-    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    # SHA-256 hex digest of the token, never the token itself: a leaked database
+    # must not hand out working refresh tokens.
+    token_hash = Column(String(64), unique=True, nullable=False, index=True)
+    user_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     expires_at = Column(DateTime, nullable=False)
     revoked = Column(Boolean, default=False)
     created_at = Column(DateTime, default=utc_now)

@@ -4,17 +4,17 @@
 
 ### Registration
 1. Validate input (Pydantic)
-2. Check if email exists in DB
+2. Check if the email or username exists (one combined error message)
 3. Hash password (pbkdf2_sha256)
 4. Insert user record
 5. Return 201 Created
 
 ### Login
 1. Look up user by email
-2. Verify hashed password
+2. Verify the password (a dummy hash is checked when the email is unknown, so timing does not reveal which emails exist)
 3. Generate access token (15 min expiry)
 4. Generate refresh token (7 days expiry)
-5. Store refresh token in DB
+5. Store the SHA-256 hash of the refresh token in the DB (never the token)
 6. Return both tokens
 
 ## Password Security
@@ -29,7 +29,7 @@
 
 Trade-off: pbkdf2_sha256 avoids compilation issues in CI/CD.
 
-**Minimum password length**: 6 characters
+**Password length**: 8 to 128 characters (the upper bound stops huge inputs from becoming a hashing denial of service)
 
 ## JWT Implementation
 
@@ -39,15 +39,15 @@ Trade-off: pbkdf2_sha256 avoids compilation issues in CI/CD.
 - exp: expiration timestamp
 - iat: issued-at timestamp
 - type: "access"
-- jti: UUID v4 (for replay prevention)
+- jti: UUID v4 (used to revoke an access token on logout)
 
 ### Security Considerations
 
 | Concern | Mitigation |
 |---------|------------|
 | **Token theft** | Short expiry (15 minutes) |
-| **Token tampering** | Signature verification (HS256) |
-| **Replay attacks** | jti claim |
+| **Token tampering** | Signature verification (HS256, algorithm pinned server-side, `exp` and `sub` required) |
+| **Stolen token after logout** | `jti` goes on a Redis revocation list until the token expires (fails open if Redis is down) |
 | **Token leakage** | TLS/HTTPS in production |
 
 ## Refresh Token Strategy
@@ -64,10 +64,10 @@ On refresh:
 
 | Attack | Risk Level | Mitigation |
 |--------|------------|------------|
-| **Database breach** | High | Password hashing, no plaintext |
+| **Database breach** | High | Passwords hashed (PBKDF2), refresh tokens stored only as SHA-256 hashes |
 | **Token theft** | High | Short expiry, refresh rotation |
 | **DDoS** | Medium | Rate limiting, circuit breakers |
-| **JWT secret leak** | Critical | Key rotation, revoke all tokens |
+| **JWT secret leak** | Critical | App refuses to start in production without a random 32+ character secret (from a Kubernetes Secret); rotating the secret invalidates every token |
 | **SQL injection** | Medium | SQLAlchemy ORM |
 | **MITM** | Medium | HTTPS in production |
 
@@ -80,3 +80,14 @@ On refresh:
 5. Use HTTPS in production (TLS 1.2+)
 6. Validate all inputs (Pydantic)
 7. Keep dependencies updated (pip audit)
+
+## Tokens never travel in URLs
+
+`/auth/refresh` and `/auth/logout` take the refresh token in the JSON body. Query strings end up in access logs, proxies and browser history.
+
+## Known gaps
+
+- No refresh-token reuse detection (replaying an already-rotated token is rejected, but it does not revoke the user's other sessions).
+- No account lockout; brute force is limited only by the 10/min per-IP auth limit.
+- `/metrics` is unauthenticated.
+- HS256 with one shared secret; asymmetric keys (RS256) would let other services verify tokens without being able to mint them.

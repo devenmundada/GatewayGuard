@@ -6,6 +6,11 @@ metadata:
     app: gatewayguard
 spec:
   replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0   # never remove the old pod before the new one is Ready
+      maxSurge: 1
   selector:
     matchLabels:
       app: gatewayguard
@@ -16,6 +21,12 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/hostname: gg-app
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
       containers:
       - name: gatewayguard
         image: docker.io/library/gatewayguard:latest
@@ -33,19 +44,52 @@ spec:
             secretKeyRef:
               name: gatewayguard-secrets
               key: REDIS_URL
+        - name: JWT_SECRET            # app refuses to start in production without this
+          valueFrom:
+            secretKeyRef:
+              name: gatewayguard-secrets
+              key: JWT_SECRET
         - name: ENVIRONMENT
           value: "production"
+        - name: WEB_CONCURRENCY
+          value: "2"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 192Mi
+          limits:
+            memory: 512Mi
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop: ["ALL"]
+        volumeMounts:
+        - name: tmp                    # gunicorn heartbeat files + Prometheus multiprocess files
+          mountPath: /tmp
+        # Starting: give gunicorn time to boot before liveness is judged.
+        startupProbe:
+          httpGet:
+            path: /health/live
+            port: 8000
+          periodSeconds: 3
+          failureThreshold: 20
+        # Liveness: "is the process alive?" Never depends on PostgreSQL, so a database
+        # outage cannot make Kubernetes restart healthy pods in a loop.
         livenessProbe:
           httpGet:
-            path: /health
+            path: /health/live
             port: 8000
-          initialDelaySeconds: 30
           periodSeconds: 10
           failureThreshold: 3
+        # Readiness: "can it serve traffic?" Checks PostgreSQL (Redis is optional).
+        # While this fails the pod is taken out of the Service but NOT restarted.
         readinessProbe:
           httpGet:
-            path: /health
+            path: /health/ready
             port: 8000
-          initialDelaySeconds: 15
           periodSeconds: 5
           failureThreshold: 3
+      volumes:
+      - name: tmp
+        emptyDir: {}

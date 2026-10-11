@@ -1,54 +1,67 @@
 """
-Authentication middleware to validate JWT tokens.
+Authentication middleware: validates the JWT on every non-public route.
 """
 from fastapi import status
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+
 from app.core.auth import decode_token
+from app.core.token_blacklist import is_access_token_revoked
+
+
+def _unauthorized(detail: str) -> JSONResponse:
+    return JSONResponse(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        content={"detail": detail},
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
 
 class AuthMiddleware(BaseHTTPMiddleware):
-    """Middleware to authenticate requests."""
-    
-    # Public paths that don't require authentication
-    PUBLIC_PATHS = [
-        "/health",
-        "/metrics",
-        "/docs",
-        "/redoc",
-        "/openapi.json",
-        "/api/v1/auth/register",
-        "/api/v1/auth/login",
-        "/api/v1/auth/refresh",
-    ]
-    
+    """Authenticates requests and sets request.state.user_id / user_email / jti."""
+
+    # Exact matches only. (startswith let "/healthz-anything" and "/metrics/x" skip auth.)
+    PUBLIC_PATHS = frozenset(
+        {
+            "/",
+            "/health",
+            "/health/live",
+            "/health/ready",
+            "/metrics",
+            "/docs",
+            "/redoc",
+            "/openapi.json",
+            "/api/v1/auth/register",
+            "/api/v1/auth/login",
+            "/api/v1/auth/refresh",
+            "/api/v1/auth/logout",
+        }
+    )
+
     async def dispatch(self, request: Request, call_next):
-        # Check if path is public
-        path = request.url.path
-        if any(path.startswith(public_path) for public_path in self.PUBLIC_PATHS):
+        # CORS preflight requests carry no credentials by design.
+        if request.method == "OPTIONS" or request.url.path in self.PUBLIC_PATHS:
             return await call_next(request)
-        
-        # Check for token in Authorization header
-        auth_header = request.headers.get("Authorization")
-        if not auth_header or not auth_header.startswith("Bearer "):
-            return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={"detail": "Missing or invalid authentication token"},
-                headers={"WWW-Authenticate": "Bearer"},
-            )
 
-        token = auth_header.split(" ")[1]
-        payload = decode_token(token)
+        auth_header = request.headers.get("Authorization", "")
+        if not auth_header.startswith("Bearer "):
+            return _unauthorized("Missing or invalid authentication token")
 
+        payload = decode_token(auth_header[7:].strip())
         if not payload or payload.get("type") != "access":
-            return JSONResponse(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                content={"detail": "Invalid or expired token"},
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        
-        # Add user info to request state
-        request.state.user_id = int(payload.get("sub"))
+            return _unauthorized("Invalid or expired token")
+
+        try:
+            user_id = int(payload["sub"])
+        except (KeyError, TypeError, ValueError):
+            return _unauthorized("Invalid or expired token")
+
+        jti = payload.get("jti")
+        if jti and await is_access_token_revoked(jti):
+            return _unauthorized("Token has been revoked")
+
+        request.state.user_id = user_id
         request.state.user_email = payload.get("email")
-        
+        request.state.jti = jti
         return await call_next(request)

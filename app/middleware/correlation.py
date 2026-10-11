@@ -3,7 +3,6 @@ Middleware to inject and propagate correlation IDs.
 """
 
 import uuid
-from typing import Optional
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request

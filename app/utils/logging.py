@@ -4,6 +4,7 @@ Structured logging with JSON formatter.
 
 import logging
 import sys
+
 from pythonjsonlogger import jsonlogger
 
 

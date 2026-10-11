@@ -5,6 +5,10 @@ metadata:
   namespace: default
 spec:
   type: NodePort
+  # Local = the pod sees the caller's real source IP instead of the node's cluster
+  # address. Without it every client looks like one IP and shares one rate-limit bucket.
+  # (The pod runs only on gg-app, so use http://192.168.252.2:30080.)
+  externalTrafficPolicy: Local
   selector:
     app: gatewayguard
   ports:

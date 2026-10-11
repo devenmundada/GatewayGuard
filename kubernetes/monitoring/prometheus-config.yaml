@@ -31,3 +31,14 @@ data:
             annotations:
               summary: "GatewayGuard is unreachable"
               description: "Prometheus could not scrape GatewayGuard for 1 minute."
+
+          - alert: GatewayGuardHighErrorRate
+            expr: |
+              sum(rate(http_requests_total{status=~"5.."}[5m]))
+                / clamp_min(sum(rate(http_requests_total[5m])), 1) > 0.05
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "More than 5% of requests are failing with 5xx"
+              description: "5xx ratio over the last 5 minutes: {{ $value | humanizePercentage }}"

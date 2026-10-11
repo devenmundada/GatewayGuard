@@ -13,20 +13,21 @@
 - ✅ Health checks (liveness + readiness)
 - ✅ Docker support (docker-compose)
 - ✅ CI/CD pipeline (GitHub Actions)
-- ✅ 17 passing tests (unit + integration)
+- ✅ 60+ tests against real PostgreSQL and Redis
 - ✅ Load tested (100 users, 4ms median)
 
 **Known Limitations:**
-- Memory fallback per-worker, not global
+- Memory fallback is per worker, not global
 - Fixed-window rate limiting (burst at boundaries)
-- Circuit breaker state not shared across workers
-- No automatic Redis recovery
+- Single app replica on one node
+- `/metrics` unauthenticated
+
+Done since the first release: atomic Redis limiter, automatic Redis recovery (circuit breaker), real tasks API, Alembic migrations, Kubernetes manifests with split liveness/readiness probes, Prometheus persistence and alerting, access-token revocation on logout.
 
 ## Phase 1: Performance & Reliability (Q3 2026)
 
 - Sliding Window Rate Limiter (Redis Sorted Set)
 - Distributed Circuit Breaker State (stored in Redis)
-- Automatic Redis Recovery (background ping thread)
 
 ## Phase 2: Observability & Debugging (Q4 2026)
 
@@ -49,7 +50,7 @@
 
 ## Phase 5: Production Hardening (Q3 2027)
 
-- Kubernetes Support (Helm charts)
+- Helm charts for the Kubernetes manifests
 - Secret Management (Vault / AWS Secrets Manager)
 - Automated Performance Testing in CI/CD
 

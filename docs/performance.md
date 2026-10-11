@@ -1,5 +1,7 @@
 # 📊 GatewayGuard Performance Analysis
 
+> **Note:** these numbers were measured on the first version of the service (per-request database connections, per-process metrics, GET-then-INCR limiter). The connection pool, atomic limiter and metrics middleware changed since then; re-run `locustfile.py` before quoting them.
+
 ## Load Test Methodology
 
 ### Testing Environment

@@ -2,9 +2,9 @@
 
 # 🛡️ GatewayGuard
 
-### Production-Grade API Gateway — Built for Real Infrastructure
+### An API Gateway Deployed Like a Real Service
 
-*Not a tutorial project. A complete, end-to-end system running across 3 real Linux servers with automation, orchestration, and live monitoring.*
+*A FastAPI gateway running on a 3-node Kubernetes cluster, with automation, monitoring and alerting. Built to learn how services are really operated, failures included.*
 
 [![CI](https://github.com/devenmundada/GatewayGuard/actions/workflows/ci-cd.yml/badge.svg)](https://github.com/devenmundada/GatewayGuard/actions)
 [![Python](https://img.shields.io/badge/Python-3.13-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
@@ -69,22 +69,43 @@ GatewayGuard started as a FastAPI application. This repository is the complete i
 
 ## The Application
 
-GatewayGuard is a JWT-authenticated API gateway built with FastAPI:
+GatewayGuard is a JWT-authenticated API gateway built with FastAPI. Everything below is covered by automated tests that run against real PostgreSQL and Redis.
 
-| Feature | Implementation |
-|---------|---------------|
-| Authentication | JWT with refresh token rotation (15min access / 7day refresh) |
-| Rate Limiting | Redis-backed per-user and per-IP limiting with in-memory fallback |
-| Resilience | Circuit breaker (CLOSED → OPEN → HALF-OPEN) |
-| Observability | Structured JSON logging with correlation IDs across every request |
-| Metrics | Prometheus exposition at `/metrics` |
-| Health | Liveness + readiness checks at `/health` |
-| Tests | 17 passing unit and integration tests |
-| Load | 50 concurrent users — 6ms median latency |
+| Feature | What it actually does |
+|---------|----------------------|
+| Authentication | JWT access tokens (15 min) and refresh tokens (7 days). Refresh tokens are **single-use** (rotated on every refresh) and **stored hashed** (SHA-256). Logout revokes the refresh token and the current access token (its `jti` goes on a Redis revocation list until it would expire anyway). |
+| Rate limiting | Fixed window, enforced in Redis by one atomic Lua script, so workers and pods share one counter. Limits: 10/min on auth endpoints, 100/min anonymous (per IP), 200/min per logged-in user. Returns `429` with `Retry-After`. `/health*` and `/metrics` are exempt. |
+| Resilience | The Redis calls of the rate limiter run behind a circuit breaker (CLOSED, OPEN, HALF-OPEN). When Redis is down the limiter switches to a per-process memory fallback immediately and returns to Redis by itself when it recovers. |
+| Database outage | PostgreSQL unreachable gives `503` + `Retry-After`, never a fake `401`, and `/health/ready` fails so Kubernetes stops sending traffic. There is no in-memory database fallback. |
+| Tasks API | Real CRUD (`/api/v1/tasks`) with pagination, a `completed` filter and per-user ownership (another user's task id returns `404`). |
+| Observability | JSON logs with a correlation id (`X-Request-ID`) on every request, including rejected ones. Prometheus metrics: `http_requests_total`, `http_request_duration_seconds`, `http_rate_limited_total`, aggregated correctly across all gunicorn workers. |
+| Health | `/health/live` (process is up, never touches the database), `/health/ready` and `/health` (PostgreSQL required, Redis optional). |
+| Schema | Alembic migrations (`scripts/migrate.py`); CI runs them and fails if the models drift from the migrations. |
+| Config safety | With `ENVIRONMENT=production` the app **refuses to start** without a random `JWT_SECRET` of 32+ characters. |
+
+### Request path
+
+Every request passes through the layers in this order (outermost first):
+
+```
+CORS -> CorrelationID -> Logging -> Metrics -> Auth -> RateLimiter -> route
+```
+
+CORS is outermost so even `401`/`429` responses carry CORS headers. Correlation id, logging and metrics sit outside auth and the limiter so rejected requests are still identified, logged and counted. Auth runs before the limiter so logged-in users get their own per-user bucket.
+
+### Known limitations (honest list)
+
+- **Memory fallback is per process.** While Redis is down, each of the N workers counts separately, so the effective limit is up to N times higher.
+- **Access-token revocation fails open.** If Redis is down, a logged-out access token keeps working until its 15 minute expiry.
+- **Fixed-window limiting** allows up to 2x the limit across a window boundary.
+- **Single replica** of the app on one node (`gg-app`); a node failure is an outage.
+- **`/metrics` is unauthenticated** (Prometheus scrapes it over the NodePort). Fine for a lab network, not for the internet.
+- **Registration reveals whether an email or username is taken** (one combined message, rate limited at 10/min).
+- The load-test numbers further down were measured on the first version, before the connection pool, metrics and limiter changes; re-measure before quoting them.
 
 ---
 
-## Infrastructure — 6 Phases
+## Infrastructure — 7 Phases
 
 ### Phase 0 — Linux Server Setup
 Provisioned 3 Ubuntu VMs using Multipass. Manually configured firewalls, SSH, and system security on each — no scripts, no shortcuts — to build genuine Linux fluency before automating anything.
@@ -146,11 +167,7 @@ Installed K3s across all 3 VMs to form a real Kubernetes cluster. Migrated Gatew
 
 **Self-healing demonstrated:** Deleted a running pod in Lens → Kubernetes detected replica count dropped below desired → new pod running within 10 seconds. Zero human intervention.
 
-**Probes in action** (visible in live logs):
-```
-{"path":"/health","client_ip":"10.42.0.1","status_code":200,"duration_ms":4.18}
-```
-`10.42.0.1` is Kubernetes itself — hitting `/health` every 5-10 seconds automatically.
+**Probes:** the kubelet calls two different endpoints. `/health/live` (liveness) only says the process is up, so a database outage can never put pods into a restart loop. `/health/ready` (readiness) checks PostgreSQL; while it fails the pod is removed from the Service but not restarted. This was verified by stopping PostgreSQL: readiness went to 503, liveness stayed 200, and no pod restarted.
 
 **Kubernetes Secrets:** Removed all plaintext credentials from YAML files. Database URL and Redis URL stored as a Secret, injected into the container at startup. Deployment files are now safe to commit publicly.
 
@@ -168,7 +185,11 @@ GatewayGuard /metrics → Prometheus (every 15s) → Grafana → Browser
 - CPU time — shows processing load
 - GC activity rate — shows Python garbage collection across 3 generations
 
-**Persistent storage:** Added a PersistentVolumeClaim so Grafana dashboards survive pod restarts. Before this, every pod restart wiped the dashboard configuration.
+**Persistent storage:** Grafana dashboards and Prometheus time series each live on a PersistentVolumeClaim, so they survive pod restarts.
+
+### Phase 6 — Alerting
+
+Prometheus evaluates alert rules (`GatewayGuardDown`, `GatewayGuardHighErrorRate`) and sends them to Alertmanager, which delivers FIRING and RESOLVED messages to Telegram. The bot token is a Kubernetes Secret mounted as a file, never in git. The `GatewayGuardDown` path was tested end to end (FIRING and RESOLVED messages both arrived on Telegram); the error-rate rule is defined but has not been triggered yet.
 
 ---
 
@@ -215,7 +236,11 @@ Every problem below is a real production issue that experienced engineers encoun
 | Disk pressure taint | Grafana stuck in Pending, `0/3 nodes available` | After 3 weeks idle, disk hit 63% — Kubernetes auto-tainted the node | Pruned unused images, removed taint with `kubectl taint nodes gg-db ... -` |
 | Prometheus showing no data | All queries returned empty results | VM clock drifted 4 days while idle — timestamps didn't align with browser time | `chronyc makestep` to force immediate clock sync |
 | asyncpg build failure | Docker build failed | asyncpg 0.29.0 incompatible with Python 3.13 | Updated to asyncpg 0.30.0 |
-| gunicorn not found | Container crashed immediately on start | gunicorn missing from requirements.txt | Added gunicorn==22.0.0 |
+| gunicorn not found | Container crashed immediately on start | gunicorn missing from requirements.txt | Added gunicorn to requirements.txt |
+| CI hung for 4 hours | A request that hit a database error never returned | The rate limiter middleware called `call_next` a second time inside its `except` block after the app had already raised | Restructured so only the limiter's own logic is inside `try`; added `--timeout=60` to pytest |
+| `ErrImageNeverPull` | Port 30080 refused connections | The image had vanished from K3s's containerd store (Docker and K3s keep separate image stores) | Re-imported with `docker save \| k3s ctr images import -`; `start.sh` now checks for it |
+| Pods on workers could not resolve DNS | Cross-node requests timed out | Flannel (8472/udp) and kubelet (10250) were blocked by ufw on `gg-db` / `gg-cache` | Opened the ports; `start.sh` and the Ansible playbook now do it |
+| Health check said "healthy" with the database down | Stopping PostgreSQL changed nothing in `/health` | The endpoint returned a hard-coded response | Real checks: readiness runs `SELECT 1` and pings Redis |
 
 ---
 
@@ -223,16 +248,16 @@ Every problem below is a real production issue that experienced engineers encoun
 
 | Layer | Technology | Version |
 |-------|-----------|---------|
-| Framework | FastAPI | 0.115 |
-| Server | Gunicorn + Uvicorn | 22.0 / 0.30 |
+| Framework | FastAPI + Starlette | 0.143 / 1.7 |
+| Server | Gunicorn + Uvicorn workers | 23 / 0.30 |
 | Database | PostgreSQL | 16 |
 | Cache | Redis | 7 |
-| ORM | SQLAlchemy (async) | 2.0 |
-| Auth | python-jose | 3.3 |
+| ORM / migrations | SQLAlchemy (async) + Alembic | 2.0 / 1.13 |
+| Auth | PyJWT + passlib (PBKDF2-SHA256) | 2.15 / 1.7 |
 | Containers | Docker + containerd | — |
 | Orchestration | Kubernetes (K3s) | v1.36.3 |
 | Automation | Ansible | — |
-| Monitoring | Prometheus + Grafana | — |
+| Monitoring | Prometheus + Alertmanager + Grafana | — |
 | Load Testing | Locust | 2.x |
 | CI/CD | GitHub Actions | — |
 | VM Management | Multipass | Ubuntu 26.04 ARM64 |
@@ -243,36 +268,27 @@ Every problem below is a real production issue that experienced engineers encoun
 
 ```
 GatewayGuard/
-│
-├── app/                          # FastAPI application
-│   ├── api/v1/                   # Route handlers (auth, tasks)
-│   ├── core/                     # Circuit breaker, rate limiter
-│   ├── db/                       # Models, CRUD, migrations
-│   ├── middleware/               # Auth, logging, rate limiting
-│   └── services/                 # Redis client
-│
-├── ansible/                      # Infrastructure automation
-│   ├── deploy.yml                # Main playbook
-│   └── ansible.cfg               # Configuration
-│
-├── kubernetes/                   # Kubernetes manifests
-│   ├── gatewayguard-deployment.yaml   # App deployment + probes + secrets
-│   ├── gatewayguard-service.yaml      # NodePort service
-│   └── monitoring/
-│       ├── prometheus-config.yaml     # Scrape configuration (ConfigMap)
-│       ├── prometheus-deployment.yaml # Prometheus + NodePort service
-│       ├── grafana-deployment.yaml    # Grafana + NodePort service
-│       └── grafana-pvc.yaml           # Persistent storage for dashboards
-│
-├── services/                     # Companion services
-│   ├── subscriber-registry/      # Telecom HSS analog (FastAPI + Redis)
-│   └── health-aggregator/        # Unified health endpoint (FastAPI + httpx)
-│
-├── tests/                        # 17 passing tests
-├── locustfile.py                 # Load test (50 concurrent users)
-├── Dockerfile.prod               # Production container
-├── docker-compose.yml            # Local development
-└── pyproject.toml                # Tool configuration (ruff, pytest)
+├── app/
+│   ├── api/                 # health, metrics, v1/auth, v1/tasks, deps
+│   ├── core/                # JWT + passwords, rate limiter, circuit breaker, token revocation
+│   ├── db/                  # models, CRUD, async engine/pool
+│   ├── middleware/          # correlation id, logging, metrics, auth, rate limiter
+│   ├── schemas/             # request/response models
+│   ├── services/            # Redis client
+│   └── utils/               # logging, client IP
+├── migrations/              # Alembic migrations (0001 initial, 0002 hashed refresh tokens)
+├── scripts/
+│   ├── migrate.py           # runs migrations (also adopts a pre-Alembic database)
+│   ├── deploy.sh            # build image on gg-app, migrate, roll out
+│   └── start.sh             # bring the cluster back after a break
+├── kubernetes/              # app, service, migrate job, monitoring (Prometheus, Alertmanager, Grafana)
+├── ansible/                 # legacy Docker-based provisioning (secrets via secrets.yml)
+├── services/                # companion services (subscriber registry, health aggregator)
+├── tests/                   # 60+ tests against real PostgreSQL and Redis
+├── Dockerfile.prod          # non-root, health-checked, no compiler, no tests inside
+├── gunicorn.conf.py         # workers + Prometheus multiprocess cleanup
+├── requirements.txt         # runtime dependencies (exact pins)
+└── requirements-dev.txt     # test / lint / audit tools
 ```
 
 ---
@@ -284,34 +300,47 @@ git clone https://github.com/devenmundada/GatewayGuard.git
 cd GatewayGuard
 
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
-docker compose up -d        # Start PostgreSQL + Redis
-python create_tables.py     # Create database tables
+cp .env.example .env
+docker compose up -d                       # PostgreSQL (port 5433) + Redis
+python scripts/migrate.py                  # create / update tables
 uvicorn app.main:app --reload --port 8000
 ```
 
 | URL | Purpose |
 |-----|---------|
-| `http://localhost:8000/docs` | Swagger UI |
-| `http://localhost:8000/health` | Health check |
+| `http://localhost:8000/docs` | Swagger UI (disabled when `ENVIRONMENT=production`) |
+| `http://localhost:8000/health/ready` | Readiness (database + Redis) |
 | `http://localhost:8000/metrics` | Prometheus metrics |
 
+Running the tests needs PostgreSQL and Redis running and migrated, with `ENVIRONMENT=testing`:
+
 ```bash
-pytest tests/ -v            # Run all 17 tests
+ENVIRONMENT=testing python scripts/migrate.py
+pytest tests/ -v
 ```
 
 ---
 
-## CI/CD Pipeline
+## Deploying to the cluster
 
-GitHub Actions runs automatically on every push:
+```bash
+./scripts/deploy.sh      # generates JWT_SECRET if missing, builds, migrates, rolls out
+```
+
+---
+
+## CI Pipeline
+
+GitHub Actions runs on every push and pull request. Every job is blocking.
 
 | Job | What it checks |
 |-----|---------------|
-| Lint Check | ruff — code style and quality |
-| Security Scan | Dependency vulnerability scanning |
-| Test Suite | Full pytest suite against real PostgreSQL + Redis |
+| Tests | Migrations applied to a real PostgreSQL, `alembic check` (models match migrations), full pytest suite with Redis |
+| Lint | `ruff check` (no auto-fix) |
+| Dependency audit | `pip-audit` on `requirements.txt`; any known vulnerability fails the build |
+| Docker image | Builds `Dockerfile.prod`, checks it refuses to start with the default secret, runs as non-root, and answers `/health/live` |
 
 ---
 

@@ -21,7 +21,7 @@ python3.12 -m venv venv
 source venv/bin/activate
 
 # 3. Install dependencies
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 
 # 4. Configure environment
 cp .env.example .env
@@ -30,7 +30,7 @@ cp .env.example .env
 docker compose up -d
 
 # 6. Run migrations
-alembic upgrade head
+python scripts/migrate.py
 
 # 7. Start the app
 uvicorn app.main:app --reload --port 8000
@@ -42,6 +42,7 @@ API available at http://localhost:8000
 
 ```bash
 pytest tests/ -v
+# needs PostgreSQL + Redis running and migrated (docker compose up -d; python scripts/migrate.py)
 pytest tests/ --cov=app --cov-report=html
 pytest tests/integration/test_auth.py -v
 ```

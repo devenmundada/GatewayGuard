@@ -1,77 +1,69 @@
-# 🚦 GatewayGuard Rate Limiting Deep Dive
+# 🚦 GatewayGuard Rate Limiting
 
-## Algorithm Selection
+## Algorithm: fixed window counter
 
-### Fixed Window Counter (Chosen)
+For each key (IP or user id) there is one counter that lives for one window (60 s).
+When the counter exceeds the limit, requests get `429`.
 
-**How it works**:
-1. Maintain a counter for each key (IP or user ID)
-2. Counter resets every window (60 seconds)
-3. If counter >= limit, block request
+**Pros**: simple, one counter per key, atomic in Redis, TTL cleans up by itself.
+**Cons**: burst problem. Just before and just after a window boundary, up to 2x the limit can pass.
 
-**Pros**:
-- Simple to implement
-- Low memory overhead (one counter per key)
-- Atomic operations in Redis
-- TTL for automatic cleanup
+Alternatives considered: sliding window (more accurate, more memory), token bucket, GCRA. Not needed at this scale.
 
-**Cons**:
-- Burst problem: At window boundaries, 2x limit can pass
+## Redis implementation
 
-### Alternatives Considered
+One Lua script runs atomically inside Redis:
 
-- **Sliding Window**: More accurate but memory-heavy. Not chosen.
-- **Token Bucket**: Smooths traffic but more complex. Not chosen.
-- **GCRA**: Used by Cloudflare. Overkill for our scale.
+```
+count = INCR key
+if count == 1 then EXPIRE key window end   -- expiry is set once, on the first hit
+return count, TTL key
+```
 
-## Redis Implementation
+Atomic means two workers can never both read "99" and both allow request 100. The expiry is set only on the first hit, so the window really is fixed. (An earlier version did GET, then INCR, then EXPIRE on every hit: racy, and the constant TTL refresh meant a steady trickle never reset.)
 
-### Key Strategy
+### Keys
 
-- Authenticated users: rl:user:{user_id}
-- Anonymous/IP: rl:ip:{ip_address}
+| Who | Key | Limit |
+|-----|-----|-------|
+| Logged-in user | `rl:user:{user_id}` | 200 / 60 s |
+| Anonymous, auth endpoints | `rl:auth:ip:{ip}` | 10 / 60 s |
+| Anonymous, everything else | `rl:default:ip:{ip}` | 100 / 60 s |
 
-### Limit Configuration
+`/health*` and `/metrics` are exempt. Responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining`, and on `429` also `Retry-After`.
 
-| Scope | Limit | Window | Rationale |
-|-------|-------|--------|-----------|
-| Auth endpoints | 10 | 60s | Prevent brute-force |
-| Public endpoints | 100 | 60s | Basic DDoS protection |
-| Authenticated users | 200 | 60s | Higher limit for legitimate users |
+### Which IP?
 
-## Memory Fallback
+By default the TCP peer address. `X-Forwarded-For` is ignored unless `TRUSTED_PROXY_COUNT` is set to the number of proxies in front of the app, because any client can forge that header to dodge its limit. In Kubernetes the Service uses `externalTrafficPolicy: Local` so the pod sees the real client address instead of the node's.
 
-### How it works
+## Circuit breaker around Redis
 
-Uses a Python dict mapping keys to lists of timestamps. On each request:
-1. Remove timestamps older than the window
-2. Count remaining timestamps
-3. If count >= limit, block. Otherwise, append current timestamp.
+The Redis call runs under a circuit breaker (`app/core/circuit_breaker.py`):
 
-### Limitations
+| State | Behaviour |
+|-------|-----------|
+| CLOSED | Redis is used. 3 consecutive failures open the breaker. |
+| OPEN | Redis is skipped entirely (no socket timeout per request); memory fallback is used. |
+| HALF-OPEN | After 10 s one trial call goes to Redis. Success closes the breaker, failure re-opens it. |
 
-| Limitation | Explanation | Mitigation |
-|------------|-------------|------------|
-| **Per-Process** | Each worker has its own dict | Acceptable for small deployments |
-| **Memory Bloat** | Stores timestamps, not just counters | Periodic cleanup on each access |
-| **No TTL** | Entries persist until cleaned | Clean on each access |
+So the limiter returns to Redis by itself, with no restart and no background thread.
 
-## Failure Scenarios
+## Memory fallback
 
-### Redis Connection Timeout
-- Timeout at 2 seconds
-- Exception caught, redis_available set to False
-- Switches to memory fallback
+A per-process dict of `key -> (window_start, count)` with the same fixed-window semantics, guarded by a lock and bounded to 10,000 keys.
 
-### Memory Store Growth (estimate)
-- 1000 users after 1 hour
-- ~60,000 timestamps total
-- ~480 KB memory footprint (acceptable)
+| Limitation | Explanation |
+|------------|-------------|
+| Per process | With N gunicorn workers the effective limit while Redis is down is up to N times higher. It keeps the gateway protected, not precise. |
+| Lost on restart | Counters live in memory. |
 
-## Future Improvements
+## Failure behaviour
 
-1. **Sliding Window** using Redis Sorted Set
-2. **Automatic Redis Recovery** via background thread
-3. **Redis Cluster** for horizontal scaling
-4. **Dynamic Rate Limits** by user plan (free/pro/enterprise)
-5. **Retry-After headers** for rate-limited responses
+- Redis down: breaker opens, memory fallback, `redis` shows `degraded` in `/health/ready` (still ready).
+- Limiter code itself raises: the request is let through (fail open) and the error is logged. The app is never called twice.
+
+## Future improvements
+
+1. Sliding window using a Redis sorted set
+2. Per-plan limits (free / pro / enterprise)
+3. Redis Cluster
